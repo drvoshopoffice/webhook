@@ -1,17 +1,18 @@
 // server.js
-// Minimalni webhook: samo loguje FB + IG poruke
-
 const express = require("express");
 require("dotenv").config();
 
 const app = express();
 app.use(express.json());
 
+const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;   // ostavljeno, ali se ne koristi
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "test123";
+const ASANA_TOKEN = process.env.ASANA_TOKEN;               // ostavljeno, ali se ne koristi
+const ASANA_PROJECT_ID = process.env.ASANA_PROJECT_ID;     // ostavljeno, ali se ne koristi
 
-// --------------------
-// 1) VERIFY (GET)
-// --------------------
+// ------------------------
+// 1) VERIFY WEBHOOK
+// ------------------------
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
   const token = req.query["hub.verify_token"];
@@ -22,18 +23,15 @@ app.get("/webhook", (req, res) => {
     return res.status(200).send(challenge);
   }
 
-  console.log("🔴 VERIFY FAILED");
   return res.sendStatus(403);
 });
 
-// --------------------
-// 2) EVENTS (POST)
-// --------------------
+// ------------------------
+// 2) RECEIVE EVENTS
+// ------------------------
 app.post("/webhook", (req, res) => {
   const body = req.body;
 
-  // Facebook:  object === "page"
-  // Instagram: object === "instagram" ili "instagram_account"
   if (
     body.object === "page" ||
     body.object === "instagram" ||
@@ -42,30 +40,21 @@ app.post("/webhook", (req, res) => {
     for (const entry of body.entry || []) {
       const events =
         entry.messaging ||
-        entry.standby || // IG ponekad koristi standby
+        entry.standby ||
         [];
 
       for (const event of events) {
-        const senderId = event.sender && event.sender.id;
-        const ts = event.timestamp
-          ? new Date(event.timestamp).toISOString()
-          : "no-ts";
+        const sender = event.sender?.id;
 
-        // LOGUJ PORUKE
+        // LOG messages
         if (event.message) {
-          const text = (event.message.text || "").trim();
-          const fromEcho = event.message.is_echo === true;
-
-          console.log(
-            `💬 MSG | object: ${body.object} | sender: ${senderId} | echo: ${fromEcho} | time: ${ts}`
-          );
-          console.log(`   text: ${text}`);
+          console.log(`💬 Message from ${sender}: ${event.message.text}`);
         }
 
-        // Ako želiš da vidiš i reakcije / ostalo, možeš i to da dodaš:
+        // LOG reactions
         if (event.reaction) {
           console.log(
-            `💠 REACTION | object: ${body.object} | sender: ${senderId} | emoji: ${event.reaction.emoji} | action: ${event.reaction.action}`
+            `💠 Reaction from ${sender}: ${event.reaction.emoji} (${event.reaction.action})`
           );
         }
       }
@@ -74,14 +63,13 @@ app.post("/webhook", (req, res) => {
     return res.sendStatus(200);
   }
 
-  // Nešto što ne pratimo
   return res.sendStatus(404);
 });
 
-// --------------------
+// ------------------------
 // 3) START SERVER
-// --------------------
+// ------------------------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`🚀 Webhook server sluša na portu ${PORT}`);
+  console.log(`🚀 Webhook listening on port ${PORT}`);
 });
