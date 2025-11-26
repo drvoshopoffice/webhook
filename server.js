@@ -8,8 +8,8 @@ const app = express();
 app.use(express.json());
 
 // ENV
-const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
-const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "test123";
+const PAGE_ACCESS_TOKEN = "EAAToheMwgFoBQPrfrQ3NKB2rvH8Q4Yt3zidfZAt7Cs1jFzvxxSS1vJO3ErvpHmmfT7iJdC5Eq4Br9TbzXV2fgFKkOnwqZAVabBvv6ZBMpUgchDXeLSKfvpn5hTZBRIoAWPvTOC3VjX6HiIytM1WtNFdimbKvHvujvF74XBdSCdvLNQHhrpoNNGSvLYbzMi5mFGBwQILkP1bxy6ZCB9AEBgPmf";
+const VERIFY_TOKEN = "test123";
 
 // ------------------------------
 // WEBHOOK VERIFICATION (GET)
