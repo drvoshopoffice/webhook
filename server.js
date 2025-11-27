@@ -1,5 +1,5 @@
 // server.js – FB + IG messaging → detekcija telefona → Asana task
-// Uključuje fetch Instagram/Facebook username preko Graph API.
+// Koristi name/username kad može, inače ID. Ignoriše tvoj nalog.
 
 // -----------------------
 // IMPORTI & CONFIG
@@ -28,22 +28,17 @@ const phoneRegex =
   /(\+?381|0)(6[0-9])[\s\-\/]?([0-9]{2,3})[\s\-\/]?([0-9]{2,3})[\s\-\/]?([0-9]{2,3})/g;
 
 // -----------------------
-// FETCH USERNAME
+// FETCH USER NAME (FB/IG PSID -> name)
 // -----------------------
 async function fetchUserName(psid) {
   try {
-    const url = `https://graph.facebook.com/v21.0/${psid}?fields=name,username&access_token=${PAGE_ACCESS_TOKEN}`;
+    // username je deprecated za FB; tražimo samo name
+    const url = `https://graph.facebook.com/v21.0/${psid}?fields=name&access_token=${PAGE_ACCESS_TOKEN}`;
     const res = await axios.get(url);
-
-    // Instagram korisnici često imaju samo username
-    return (
-      res.data.username ||
-      res.data.name ||
-      null
-    );
+    return res.data.name || null;
   } catch (err) {
     console.log(
-      "⚠️ Ne mogu da dobijem ime/username za",
+      "⚠️ Ne mogu da dobijem ime za",
       psid,
       "-",
       err.response?.data?.error?.message || err.message
@@ -57,7 +52,7 @@ async function fetchUserName(psid) {
 // -----------------------
 async function createAsanaTask({ source, senderName, senderId, text, phones }) {
   if (!ASANA_TOKEN || !ASANA_PROJECT_ID) {
-    console.warn("⚠️ Asana nije podešena.");
+    console.warn("⚠️ Asana nije podešena – preskačem kreiranje taska.");
     return;
   }
 
@@ -66,7 +61,11 @@ async function createAsanaTask({ source, senderName, senderId, text, phones }) {
     "Content-Type": "application/json",
   };
 
-  const taskName = `Porudžbina (${source}) – ${senderName}`;
+  // Ako nema ime, koristi ID u nazivu taska
+  const displayName =
+    senderName && senderName !== "Nepoznat" ? senderName : senderId;
+
+  const taskName = `Porudžbina (${source}) – ${displayName}`;
 
   const notesLines = [
     `Izvor: ${source}`,
@@ -78,15 +77,15 @@ async function createAsanaTask({ source, senderName, senderId, text, phones }) {
     text,
   ];
 
-  try {
-    const payload = {
-      data: {
-        name: taskName,
-        notes: notesLines.join("\n"),
-        projects: [ASANA_PROJECT_ID],
-      },
-    };
+  const payload = {
+    data: {
+      name: taskName,
+      notes: notesLines.join("\n"),
+      projects: [ASANA_PROJECT_ID],
+    },
+  };
 
+  try {
     const res = await axios.post(ASANA_URL, payload, { headers });
     console.log("✅ Asana task kreiran:", res.data.data.gid);
   } catch (err) {
@@ -101,13 +100,16 @@ async function createAsanaTask({ source, senderName, senderId, text, phones }) {
 // VERIFY WEBHOOK
 // -----------------------
 app.get("/webhook", (req, res) => {
-  if (
-    req.query["hub.mode"] === "subscribe" &&
-    req.query["hub.verify_token"] === VERIFY_TOKEN
-  ) {
-    return res.status(200).send(req.query["hub.challenge"]);
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+
+  if (mode === "subscribe" && token === VERIFY_TOKEN) {
+    console.log("🔵 WEBHOOK VERIFIED");
+    return res.status(200).send(challenge);
   }
 
+  console.log("🔴 WEBHOOK VERIFY FAILED");
   return res.sendStatus(403);
 });
 
@@ -117,6 +119,7 @@ app.get("/webhook", (req, res) => {
 app.post("/webhook", async (req, res) => {
   const body = req.body;
 
+  // Meta očekuje odgovor odmah
   res.sendStatus(200);
 
   if (body.object !== "page" && body.object !== "instagram") return;
@@ -129,17 +132,17 @@ app.post("/webhook", async (req, res) => {
       for (const event of entry.messaging) {
         const text = event.message?.text || "";
         const senderId = event.sender?.id || "";
-        const source = event.messaging_product || "facebook";
+        const source = event.messaging_product || "facebook"; // 'facebook' ili 'instagram'
 
         if (!text) continue;
 
-        // Ignoriši interne poruke
+        // ignoriši tvoj nalog
         if (senderId === IGNORE_SENDER_ID) {
           console.log("🚫 Ignorišem svoj ID:", senderId);
           continue;
         }
 
-        // 🔍 fetch username/name
+        // pokušaj da dobiješ ime sa Graph API-ja
         const senderName =
           (await fetchUserName(senderId)) || "Nepoznat";
 
@@ -164,7 +167,7 @@ app.post("/webhook", async (req, res) => {
     }
 
     // --------------------------
-    // Instagram changes
+    // Instagram "changes" (ponekad IG šalje poruke ovde)
     // --------------------------
     if (entry.changes) {
       for (const change of entry.changes) {
@@ -173,21 +176,23 @@ app.post("/webhook", async (req, res) => {
         const msg = change.value;
         const text = msg.message?.text || "";
         const senderId = msg.message?.from?.id || "";
-        const nameFromIG = msg.message?.from?.username || msg.message?.from?.name;
+        const nameFromIG =
+          msg.message?.from?.username || msg.message?.from?.name;
 
         if (!text) continue;
 
         if (senderId === IGNORE_SENDER_ID) {
-          console.log("🚫 Ignorišem svoj IG ID:", senderId);
+          console.log("🚫 Ignorišem svoj IG ID (changes):", senderId);
           continue;
         }
 
+        // prvo probaj šta IG sam pošalje, pa onda Graph API, pa "Nepoznat"
         const senderName =
           nameFromIG ||
           (await fetchUserName(senderId)) ||
           "Nepoznat";
 
-        console.log("💬 IG poruka:", text);
+        console.log("💬 IG poruka (changes):", text);
         console.log(`👤 Od: ${senderName} (${senderId})`);
 
         const phones = text.match(phoneRegex);
@@ -215,4 +220,8 @@ app.post("/webhook", async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Webhook radi na portu ${PORT}`);
+  console.log(`   VERIFY_TOKEN set: ${!!VERIFY_TOKEN}`);
+  console.log(`   PAGE_ACCESS_TOKEN set: ${!!PAGE_ACCESS_TOKEN}`);
+  console.log(`   ASANA_TOKEN set: ${!!ASANA_TOKEN}`);
+  console.log(`   ASANA_PROJECT_ID set: ${!!ASANA_PROJECT_ID}`);
 });
