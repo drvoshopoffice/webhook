@@ -1,5 +1,4 @@
 // server.js – FB + IG messaging → detekcija telefona → Asana task
-// Ispravna razlika između FB i IG izvora, bez username deprecated problema.
 
 const express = require("express");
 const axios = require("axios");
@@ -8,11 +7,12 @@ require("dotenv").config();
 const app = express();
 app.use(express.json());
 
-// Meta env
+// -----------------------
+// ENV PROMENLJIVE
+// -----------------------
 const PAGE_ACCESS_TOKEN = process.env.PAGE_ACCESS_TOKEN;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN || "test123";
 
-// Asana env
 const ASANA_TOKEN = process.env.ASANA_TOKEN;
 const ASANA_PROJECT_ID = process.env.ASANA_PROJECT_ID;
 const ASANA_URL = "https://app.asana.com/api/1.0/tasks";
@@ -20,15 +20,45 @@ const ASANA_URL = "https://app.asana.com/api/1.0/tasks";
 // ID koji se ignoriše (tvoj nalog)
 const IGNORE_SENDER_ID = "17841451687614794";
 
-// Regex za srpske telefone
+// -----------------------
+// TELEFON – REGEX + NORMALIZACIJA
+// -----------------------
+
+// Hvata realne srpske mobilne brojeve bez obzira na razmake/crtice/slash
+// Primeri koje pokriva:
+//  - 0641234567
+//  - 064 123 4567
+//  - 069 583-683-3
+//  - +38164/123-45-67
 const phoneRegex =
-  /(\+?381|0)(6[0-9])[\s\-\/]?([0-9]{2,3})[\s\-\/]?([0-9]{2,3})[\s\-\/]?([0-9]{2,3})/g;
+  /(\+?381|0)\s*6\d(?:[\s\-\/]*\d){6,8}/g;
+
+/**
+ * Ekstraktuje brojeve iz teksta i normalizuje ih:
+ * - uklanja razmake, crtice, slash
+ * - 0xxxxxxxx → +381xxxxxxxx
+ * - ako već ima +381, ostaje
+ */
+function extractPhones(text) {
+  const matches = text.match(phoneRegex);
+  if (!matches) return null;
+
+  return matches.map((raw) => {
+    // Ukloni sve osim + i cifara
+    let cleaned = raw.replace(/[^\d+]/g, "");
+
+    // Ako počinje sa 0 → prebaci u +381
+    if (cleaned.startsWith("0")) {
+      cleaned = "+381" + cleaned.slice(1);
+    }
+
+    return cleaned;
+  });
+}
 
 // -----------------------
-// Pomoćne funkcije
+// POMOĆNE FUNKCIJE ZA IZVOR (FB / IG)
 // -----------------------
-
-// Odredi da li je poruka sa FB ili IG (za entry.messaging)
 function getSourceForMessaging(event, bodyObject) {
   const prod = (event.messaging_product || "").toLowerCase();
   if (prod === "instagram") return "Instagram";
@@ -37,7 +67,6 @@ function getSourceForMessaging(event, bodyObject) {
   return "Facebook";
 }
 
-// Odredi izvor za entry.changes
 function getSourceForChange(change, bodyObject) {
   const prod = (change.value?.messaging_product || "").toLowerCase();
   if (prod === "instagram") return "Instagram";
@@ -46,7 +75,9 @@ function getSourceForChange(change, bodyObject) {
   return "Facebook";
 }
 
-// Samo za Facebook – pokušaj da dohvatiš name
+// -----------------------
+// FETCH USER NAME (samo FB)
+// -----------------------
 async function fetchUserName(psid) {
   try {
     const url = `https://graph.facebook.com/v21.0/${psid}?fields=name&access_token=${PAGE_ACCESS_TOKEN}`;
@@ -63,7 +94,9 @@ async function fetchUserName(psid) {
   }
 }
 
-// Kreiranje Asana taska
+// -----------------------
+// ASANA TASK
+// -----------------------
 async function createAsanaTask({ source, senderName, senderId, text, phones }) {
   if (!ASANA_TOKEN || !ASANA_PROJECT_ID) {
     console.warn("⚠️ Asana nije podešena – preskačem kreiranje taska.");
@@ -75,6 +108,7 @@ async function createAsanaTask({ source, senderName, senderId, text, phones }) {
     "Content-Type": "application/json",
   };
 
+  // Ako nema ime, koristi ID u nazivu
   const displayName =
     senderName && senderName !== "Nepoznat" ? senderName : senderId;
 
@@ -110,7 +144,7 @@ async function createAsanaTask({ source, senderName, senderId, text, phones }) {
 }
 
 // -----------------------
-// VERIFY WEBHOOK
+// VERIFY WEBHOOK (GET)
 // -----------------------
 app.get("/webhook", (req, res) => {
   const mode = req.query["hub.mode"];
@@ -127,11 +161,12 @@ app.get("/webhook", (req, res) => {
 });
 
 // -----------------------
-// WEBHOOK EVENTS
+// WEBHOOK EVENTS (POST)
 // -----------------------
 app.post("/webhook", async (req, res) => {
   const body = req.body;
 
+  // Meta očekuje odgovor odmah
   res.sendStatus(200);
 
   if (body.object !== "page" && body.object !== "instagram") return;
@@ -147,24 +182,31 @@ app.post("/webhook", async (req, res) => {
 
         if (!text) continue;
 
-        // ignoriši tvoj nalog
+        // Ignoriši tvoj nalog
         if (senderId === IGNORE_SENDER_ID) {
           console.log("🚫 Ignorišem svoj ID:", senderId);
           continue;
         }
 
         const source = getSourceForMessaging(event, body.object);
-        let senderName = "Nepoznat";
 
-        // Za Facebook probaj da povučeš ime; za Instagram NE zovemo Graph (da izbegnemo #200)
-        if (source === "Facebook") {
+        // Pokušaj da izvučeš ime direktno iz eventa (retko prisutno)
+        const rawNameFromEvent =
+          event.message?.from?.username ||
+          event.message?.from?.name ||
+          null;
+
+        let senderName = rawNameFromEvent || "Nepoznat";
+
+        // Za Facebook – probaj preko Graph API ako nemamo ime
+        if (senderName === "Nepoznat" && source === "Facebook") {
           senderName = (await fetchUserName(senderId)) || "Nepoznat";
         }
 
         console.log("💬 PORUKA:", text);
         console.log(`👤 Od: ${senderName} (${senderId}) | Source: ${source}`);
 
-        const phones = text.match(phoneRegex);
+        const phones = extractPhones(text);
         if (phones) {
           console.log("📞 Detektovan broj:", phones);
 
@@ -177,7 +219,7 @@ app.post("/webhook", async (req, res) => {
           });
         }
 
-        console.log("────────────────────────────────────────────────────────────────────────────────────");
+        console.log("──────────────");
       }
     }
 
@@ -200,13 +242,12 @@ app.post("/webhook", async (req, res) => {
           continue;
         }
 
-        // IG često šalje username/name u samom webhooku
         const nameFromIG =
           msg.message?.from?.username || msg.message?.from?.name;
 
         let senderName = nameFromIG || "Nepoznat";
 
-        // Ako se desi da je source zapravo Facebook (ređe) i nemamo ime, možemo probati Graph:
+        // Ako se desi da je source ipak Facebook i nemamo ime, probaj Graph
         if (senderName === "Nepoznat" && source === "Facebook") {
           senderName = (await fetchUserName(senderId)) || "Nepoznat";
         }
@@ -214,7 +255,7 @@ app.post("/webhook", async (req, res) => {
         console.log("💬 IG poruka (changes):", text);
         console.log(`👤 Od: ${senderName} (${senderId}) | Source: ${source}`);
 
-        const phones = text.match(phoneRegex);
+        const phones = extractPhones(text);
         if (phones) {
           console.log("📞 Detektovan broj:", phones);
 
@@ -227,7 +268,7 @@ app.post("/webhook", async (req, res) => {
           });
         }
 
-        console.log("────────────────────────────────────────────────────────────────────────────────────");
+        console.log("──────────────");
       }
     }
   }
