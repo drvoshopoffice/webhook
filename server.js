@@ -112,7 +112,7 @@ async function createAsanaTask({ source, senderName, senderId, text, phones }) {
   const displayName =
     senderName && senderName !== "Nepoznat" ? senderName : senderId;
 
-  const taskName = `Porudžbina (${source}) – ${displayName}`;
+  const taskName = `[IME I PREZIME] - [ARTIKAL] - (${source}) – ${displayName}`;
 
   const notesLines = [
     `Izvor: ${source}`,
